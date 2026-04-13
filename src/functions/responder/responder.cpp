@@ -1,5 +1,6 @@
 #include "responder.h"
 #include "utils.h"
+#include "internal_message.hpp"
 
 // 固定消息回复功能
 static std::string HELP =
@@ -10,9 +11,23 @@ static std::string HELP =
     "变量。（response可以在第二条消息中发出）\n"
     "reply.del [trigger]\n"
     "reply.del [group_id] [trigger]\n"
+    "若为特殊触发词 $m_welcome 设置了内容, 这个触发词将在有新人入群时自动触发\n";
     "只能由群管理员操作。";
 void Responder::process(std::string message, const msg_meta &conf)
 {
+
+    if (conf.message_type == "internal" &&
+        conf.message_id == internal_message::kMemberChangeWelcome) {
+        std::lock_guard<std::mutex> lock(delayed_mutex_);
+        delayed_welcome_.push_back({
+            std::chrono::steady_clock::now() + std::chrono::seconds(7), //确保 reply 中的迎新消息发出来比 welcome 晚
+            conf.group_id,
+            conf.user_id,
+            conf.p
+        });
+        return;
+    }
+
     auto it = is_adding.find(conf.user_id);
     if (it != is_adding.end()) {
         if (conf.message_type == "private" ||
@@ -209,34 +224,75 @@ void Responder::process(std::string message, const msg_meta &conf)
     if (groupid == 0) {
         return;
     }
-    auto it_reply = replies[groupid].find(trim(message));
-    if (it_reply != replies[groupid].end()) {
-        std::string response = it_reply->second;
-        size_t pos = 0;
-        while ((pos = response.find("{{username}}", pos)) !=
-               std::string::npos) {
-            response.replace(pos, 12,
-                             get_username(conf.p, conf.user_id, groupid));
-        }
-        if (response.find("[fwd]") == 0) {
-            if (conf.message_type == "private") {
-                Json::Value J;
-                J["message"] = string_to_json(response.substr(5))["messages"];
-                J["user_id"] = conf.user_id;
-                conf.p->cq_send("send_private_forward_msg", J);
+    send_reply_by_trigger(groupid, conf.user_id, trim(message), conf.p);
+    return;
+}
+
+void Responder::send_reply_by_trigger(groupid_t group_id, userid_t user_id,
+                                      const std::string &trigger, bot *p)
+{
+    if (group_id == 0 || p == nullptr) {
+        return;
+    }
+
+    auto it_reply = replies[group_id].find(trim(trigger));
+    if (it_reply == replies[group_id].end()) {
+        return;
+    }
+
+    std::string response = it_reply->second;
+    size_t pos = 0;
+    while ((pos = response.find("{{username}}", pos)) != std::string::npos) {
+        response.replace(pos, 12, get_username(p, user_id, group_id));
+    }
+
+    if (response.find("[fwd]") == 0) {
+        Json::Value J;
+        J["message"] = string_to_json(response.substr(5))["messages"];
+        J["group_id"] = group_id;
+        p->cq_send("send_group_forward_msg", J);
+    }
+    else {
+        msg_meta conf{"group", user_id, group_id, 0, p};
+        p->cq_send(response, conf);
+    }
+}
+
+void Responder::set_callback(
+    std::function<void(std::function<void(bot *p)>)> f)
+{
+    f([this](bot *p) { flush_delayed_welcome(p); });
+}
+
+void Responder::flush_delayed_welcome(bot *p)
+{
+    struct pending_item {
+        groupid_t group_id = 0;
+        userid_t user_id = 0;
+        bot *p = nullptr;
+    };
+
+    std::vector<pending_item> pending;
+    const auto now = std::chrono::steady_clock::now();
+
+    {
+        std::lock_guard<std::mutex> lock(delayed_mutex_);
+        auto it = delayed_welcome_.begin();
+        while (it != delayed_welcome_.end()) {
+            if (now >= it->due_time) {
+                pending.push_back({it->group_id, it->user_id, it->p});
+                it = delayed_welcome_.erase(it);
             }
             else {
-                Json::Value J;
-                J["message"] = string_to_json(response.substr(5))["messages"];
-                J["group_id"] = conf.group_id;
-                conf.p->cq_send("send_group_forward_msg", J);
+                ++it;
             }
         }
-        else {
-            conf.p->cq_send(response, conf);
-        }
     }
-    return;
+
+    for (const auto &item : pending) {
+        send_reply_by_trigger(item.group_id, item.user_id, "$m_welcome",
+                              item.p != nullptr ? item.p : p);
+    }
 }
 
 void Responder::save()
@@ -304,7 +360,7 @@ bool Responder::reload(const msg_meta &conf)
 
 bool Responder::check(std::string message, const msg_meta &conf)
 {
-    return conf.message_type == "group" || conf.message_type == "private";
+    return conf.message_type == "group" || conf.message_type == "private" || conf.message_type == "internal";
 }
 std::string Responder::help() { return "固定消息回复功能：reply.help"; }
 
