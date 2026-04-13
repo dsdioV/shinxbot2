@@ -79,12 +79,14 @@ void m_change_f::process(std::string message, const msg_meta &conf)
                         "删除入群消息",
                         conf);
         return;
-        else if (message_w == L"$m_welcome") {
-            return;
-        }
     }
 
     std::wstring message_w = string_to_wstring(message);
+
+    if (message == "$m_welcome") {
+        return;
+    }
+
     if (conf.message_type == "internal") {
         std::wstring welcome_message = trim(this->format_message(
             this->get_welcome_message(conf.group_id), conf));
