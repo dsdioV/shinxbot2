@@ -10,6 +10,7 @@ static std::string HELP =
     "变量。（response可以在第二条消息中发出）\n"
     "reply.del [trigger]\n"
     "reply.del [group_id] [trigger]\n"
+    "若为特殊触发词 $m_welcome 设置了内容, 这个触发词将在有新人入群时自动触发\n"
     "只能由群管理员操作。";
 void Responder::process(std::string message, const msg_meta &conf)
 {
