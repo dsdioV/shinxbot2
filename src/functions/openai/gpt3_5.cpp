@@ -9,6 +9,7 @@
 #include <sstream>
 #include <ctime>
 #include <cstring>
+#include <chrono>
 
 /**
  * Overall API intro: https://platform.openai.com/docs/api-reference/chat/create
@@ -116,16 +117,17 @@ gpt3_5::gpt3_5()
 
 void gpt3_5::save_file()
 {
+    std::lock_guard<std::recursive_mutex> lock(data_lock);
     Json::Value J;
-    for (std::string u : key)
+    for (const std::string &u : key)
         J["keys"].append(u);
-    for (std::string u : modes)
+    for (const std::string &u : modes)
         J["mode"].append(u);
     J["black_list"] = parse_set_to_json(black_list);
     J["MAX_TOKEN"] = MAX_TOKEN;
     J["MAX_REPLY"] = MAX_REPLY;
     J["RED_LINE"] = RED_LINE;
-    for (std::string u : modes) {
+    for (const std::string &u : modes) {
         J[u] = mode_prompt[u];
     }
     writefile(bot_config_path(nullptr, "features/openai/openai.json"),
@@ -152,7 +154,7 @@ bool isASCII(const std::string &s)
 
 std::string gpt3_5::do_black(std::string message)
 {
-    std::lock_guard<std::mutex> lock(data_lock);
+    std::lock_guard<std::recursive_mutex> lock(data_lock);
     bool filtered = false;
     for (std::string u : black_list) {
         if (u.empty()) continue;
@@ -189,7 +191,7 @@ std::string gpt3_5::do_black(std::string message)
 
 size_t gpt3_5::get_avaliable_key()
 {
-    std::lock_guard<std::mutex> lock(data_lock);
+    std::lock_guard<std::recursive_mutex> lock(data_lock);
     size_t u;
     for (size_t i = 0; i < key.size(); i++) {
         if (!is_lock[u = (key_cycle + i) % key.size()]) {
@@ -202,7 +204,7 @@ size_t gpt3_5::get_avaliable_key()
 
 void gpt3_5::save_history(int64_t id)
 {
-    std::lock_guard<std::mutex> lock(data_lock);
+    std::lock_guard<std::recursive_mutex> lock(data_lock);
     Json::Value J;
     J["pre_prompt"] = pre_default[id];
     J["history"] = history[id];
@@ -210,6 +212,7 @@ void gpt3_5::save_history(int64_t id)
         bot_config_path(nullptr, "gpt3_5/" + std::to_string(id) + ".json"),
         J.toStyledString());
 }
+
 
 std::string gpt3_5::get_quoted_content(const bot *p, int64_t reply_id, int depth)
 {
@@ -402,7 +405,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
         }
     }
 
-    if (cmd_match_exact(message, "你说的话我不喜欢") && reply_id != -1) {
+    if (cmd_match_exact(message, {"你说的话我不喜欢"}) && reply_id != -1) {
         Json::Value get_msg_param;
         get_msg_param["message_id"] = reply_id;
         Json::Value msg_info =
@@ -510,112 +513,123 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
              return true;
          }},
         {".reset",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             auto it = history.find(id);
-             if (it != history.end()) {
-                 it->second.clear();
-             }
-             conf.p->cq_send("reset done.", conf);
-             save_history(id);
-             return true;
-         }},
+        [&]() {
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                history[id].clear();
+            }
+            save_history(id);
+            conf.p->cq_send("reset done.", conf);
+            return true;
+        }},
         {"reset",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             auto it = history.find(id);
-             if (it != history.end()) {
-                 it->second.clear();
-             }
-             conf.p->cq_send("reset done.", conf);
-             save_history(id);
-             return true;
-         }},
+        [&]() {
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                history[id].clear();
+            }
+            save_history(id);
+            conf.p->cq_send("reset done.", conf);
+            return true;
+        }},
         {".change",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             if (conf.p->is_op(conf.user_id) || (id & 1)) {
-                 const std::string mode = args;
-                 bool flg = false;
-                 std::string res = "avaliable modes:";
-                 for (std::string u : modes) {
-                     res += " " + u;
-                     if (u == mode) {
-                         flg = true;
-                         history[id].clear();
-                         pre_default[id] = mode;
-                         conf.p->cq_send("change done.", conf);
-                         break;
-                     }
-                 }
-                 if (!flg) {
-                     conf.p->cq_send(res, conf);
-                 }
-             }
-             else {
-                 conf.p->cq_send("Not on op list.", conf);
-             }
-             save_history(id);
-             return true;
-         }},
+        [&]() {
+            std::string reply;
+            bool need_save = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                if (conf.p->is_op(conf.user_id) || (id & 1)) {
+                    const std::string mode = args;
+                    bool flg = false;
+                    reply = "avaliable modes:";
+                    for (const std::string &u : modes) {
+                        reply += " " + u;
+                        if (u == mode) {
+                            flg = true;
+                            history[id].clear();
+                            pre_default[id] = mode;
+                            reply = "change done.";
+                            need_save = true;
+                            break;
+                        }
+                    }
+                }
+                else {
+                    reply = "Not on op list.";
+                }
+            }
+            conf.p->cq_send(reply, conf);
+            if (need_save) {
+                save_history(id);
+            }
+            return true;
+        }},
         {".sw",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             if (conf.p->is_op(conf.user_id)) {
-                 is_open = !is_open;
-                 close_message = args;
-                 conf.p->cq_send("is_open: " + std::to_string(is_open), conf);
-             }
-             else {
-                 conf.p->cq_send("Not on op list.", conf);
-             }
-             return true;
-         }},
+        [&]() {
+            bool new_state;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                if (conf.p->is_op(conf.user_id)) {
+                    is_open = !is_open;
+                    close_message = args;
+                    new_state = is_open;
+                } else {
+                    conf.p->cq_send("Not on op list.", conf);
+                    return true;
+                }
+            }
+            conf.p->cq_send("is_open: " + std::to_string(new_state), conf);
+            return true;
+        }},
         {".debug",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             if (conf.p->is_op(conf.user_id)) {
-                 is_debug = !is_debug;
-                 conf.p->cq_send("is_debug: " + std::to_string(is_debug), conf);
-             }
-             else {
-                 conf.p->cq_send("Not on op list.", conf);
-             }
-             return true;
-         }},
+        [&]() {
+            bool new_state;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                if (conf.p->is_op(conf.user_id)) {
+                    is_debug = !is_debug;
+                    new_state = is_debug;
+                } else {
+                    conf.p->cq_send("Not on op list.", conf);
+                    return true;
+                }
+            }
+            conf.p->cq_send("is_debug: " + std::to_string(new_state), conf);
+            return true;
+        }},
         {".set",
-         [&]() {
-             std::lock_guard<std::mutex> lock(data_lock);
-             std::string reply = "Not on op list.";
-             if (conf.p->is_op(conf.user_id)) {
-                 std::string type;
-                 int64_t num = 0;
-                 std::istringstream arg_iss(args);
-                 if (!(arg_iss >> type >> num)) {
-                     conf.p->cq_send("Unknown type", conf);
-                     save_file();
-                     return true;
-                 }
-                 if (type == "reply") {
-                     MAX_REPLY = num;
-                     reply = "set MAX_REPLY to " + std::to_string(num);
-                 }
-                 else if (type == "token") {
-                     MAX_TOKEN = num;
-                     reply = "set MAX_TOKEN to " + std::to_string(num);
-                 }
-                 else if (type == "red") {
-                     RED_LINE = num;
-                     reply = "set RED_LINE to " + std::to_string(num);
-                 }
-                 else {
-                     reply = "Unknown type";
-                 }
-             }
-             conf.p->cq_send(reply, conf);
-             save_file();
-             return true;
-         }},
+        [&]() {
+            std::string reply = "Not on op list.";
+            bool do_save = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                if (conf.p->is_op(conf.user_id)) {
+                    std::string type;
+                    int64_t num = 0;
+                    std::istringstream arg_iss(args);
+                    if (!(arg_iss >> type >> num)) {
+                        reply = "Unknown type";
+                    } else if (type == "reply") {
+                        MAX_REPLY = num;
+                        reply = "set MAX_REPLY to " + std::to_string(num);
+                        do_save = true;
+                    } else if (type == "token") {
+                        MAX_TOKEN = num;
+                        reply = "set MAX_TOKEN to " + std::to_string(num);
+                        do_save = true;
+                    } else if (type == "red") {
+                        RED_LINE = num;
+                        reply = "set RED_LINE to " + std::to_string(num);
+                        do_save = true;
+                    } else {
+                        reply = "Unknown type";
+                    }
+                }
+            }
+            conf.p->cq_send(reply, conf);
+            if (do_save) save_file();
+            return true;
+        }},
     };
 
     bool handled = false;
@@ -631,9 +645,13 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
 
     size_t keyid = get_avaliable_key();
     {
-        std::lock_guard<std::mutex> lock(data_lock);
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
         if (is_lock[keyid]) {
-            conf.p->cq_send("请等待上次输入的回复。", conf);
+            conf.p->cq_send("请等待其他对话中输入的回复。", conf);
+            return;
+        }
+        if (active_ids.count(id)) {
+            conf.p->cq_send("请等待该对话中上一个输入的回复。", conf);
             return;
         }
         if (!is_open) {
@@ -641,6 +659,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             return;
         }
         is_lock[keyid] = true;
+        active_ids.insert(id);
     }
 
     std::lock_guard<std::mutex> lock(gptlock[keyid]);
@@ -648,18 +667,11 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
     user_input_J["role"] = "user";
     std::string nickname = get_stranger_name(conf.p, conf.user_id);
 
-    std::time_t now = std::time(nullptr);
-    now += 8 * 3600; 
-    struct std::tm tm_utc8_res;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    now += 8 * 3600;
+    tm tm_utc8_res = *std::gmtime(&now);
     char time_buf[64] = "Unknown time";
-    
-#ifdef _WIN32
-    if (_gmtime64_s(&tm_utc8_res, &now) == 0) {
-#else
-    if (gmtime_r(&now, &tm_utc8_res) != nullptr) {
-#endif
-        std::strftime(time_buf, sizeof(time_buf), "%Y/%m/%d %H:%M:%S", &tm_utc8_res);
-    }
+    std::strftime(time_buf, sizeof(time_buf), "%Y/%m/%d %H:%M:%S", &tm_utc8_res);
 
     std::string prompt_content = "[User: " + std::to_string(conf.user_id) + " (" +
                                  nickname + ")] [Time: " + std::string(time_buf) + "]";
@@ -672,7 +684,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
     J["model"] = model_name;
     
     {
-        std::lock_guard<std::mutex> lock_data(data_lock);
+        std::lock_guard<std::recursive_mutex> lock_data(data_lock);
         
         // Pre-pruning history to avoid context-length-limit errors
         Json::Value &h = history[id];
@@ -710,8 +722,9 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
     conf.p->setlog(LOG::INFO, "openai: user " + std::to_string(conf.user_id));
     
     {
-        std::lock_guard<std::mutex> lock_data(data_lock);
+        std::lock_guard<std::recursive_mutex> lock_data(data_lock);
         is_lock[keyid] = false;
+        active_ids.erase(id);
     }
 
     if (J.isMember("error")) {
@@ -720,9 +733,11 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             conf.p->cq_send("Openai ERROR: history message is too long. Please "
                             "try again or try .ai.reset",
                             conf);
-            std::lock_guard<std::mutex> lock_data(data_lock);
-            if (history[id].size() > 0) history[id].removeIndex(0, &ign);
-            if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+            {
+                std::lock_guard<std::recursive_mutex> lock_data(data_lock);
+                if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+                if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+            }
             save_history(id);
         }
         else {
@@ -735,6 +750,10 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             J["choices"].empty()) {
             conf.p->cq_send("Openai ERROR: API 响应格式异常(缺少 choices)",
                             conf);
+            {
+                std::lock_guard<std::recursive_mutex> lock_data(data_lock);
+                active_ids.erase(id);
+            }
             return;
         }
 
@@ -748,6 +767,10 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
                 conf.p->cq_send("QAQ 响应被 OpenAI 安全策略过滤了", conf);
             } else {
                 conf.p->cq_send("API空返回！", conf);
+            }
+            {
+                std::lock_guard<std::recursive_mutex> lock_data(data_lock);
+                active_ids.erase(id);
             }
             return;
         }
@@ -765,33 +788,31 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             tokens = static_cast<int>(J["usage"]["total_tokens"].asInt64());
         }
 
-        std::lock_guard<std::mutex> lock_data(data_lock);
-        if (MAX_TOKEN < tokens) {
-            history[id].clear();
-        }
-        else {
-            for (int i = 5; i >= 1; i--) {
-                if (MAX_TOKEN - RED_LINE / i < tokens) {
-                    for (int j = 0; j < i; j++) {
-                        if (history[id].size() > 0) history[id].removeIndex(0, &ign);
-                        if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+        std::string reply_msg = "[CQ:reply,id=" + std::to_string(conf.message_id) +
+                                "] " + aimsg;
+        {
+            std::lock_guard<std::recursive_mutex> lock_data(data_lock);
+            if (MAX_TOKEN < tokens) {
+                history[id].clear();
+            }
+            else {
+                for (int i = 5; i >= 1; i--) {
+                    if (MAX_TOKEN - RED_LINE / i < tokens) {
+                        for (int j = 0; j < i; j++) {
+                            if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+                            if (history[id].size() > 0) history[id].removeIndex(0, &ign);
+                        }
+                        break;
                     }
-                    break;
                 }
             }
+            J.clear();
+            J["role"] = "assistant";
+            J["content"] = aimsg;
+            history[id].append(user_input_J);
+            history[id].append(J);
         }
-
-        std::string usage = "\n" + J["usage"].toStyledString();
-        J.clear();
-        J["role"] = "assistant";
-        J["content"] = aimsg;
-        if (is_debug)
-            aimsg += usage;
-        conf.p->cq_send("[CQ:reply,id=" + std::to_string(conf.message_id) +
-                            "] " + aimsg,
-                        conf);
-        history[id].append(user_input_J);
-        history[id].append(J);
+        conf.p->cq_send(reply_msg, conf);
     }
     save_history(id);
 }
@@ -805,7 +826,7 @@ bool gpt3_5::check(std::string message, const msg_meta &conf)
             message = trim(message.substr(pos + 1));
         }
     }
-    if (cmd_match_exact(message, "你说的话我不喜欢")) {
+    if (cmd_match_exact(message, {"你说的话我不喜欢"})) {
         return true;
     }
     return cmd_match_prefix(message, {".ai"});
@@ -838,10 +859,14 @@ uintmax_t gpt3_5::get_archives_total_size()
 
 void gpt3_5::perform_archive(int64_t id, const msg_meta &conf, bool is_auto)
 {
-    std::lock_guard<std::mutex> lock(data_lock);
-    if (!is_auto && arc_is_full) {
-        conf.p->cq_send("当前归档文件过大，已暂停生成。请联系管理员", conf);
-        return;
+    {
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
+        if (arc_is_full) {
+            if (!is_auto) {
+                conf.p->cq_send("当前归档文件过大，已暂停生成。请联系管理员", conf);
+            }
+            return;
+        }
     }
 
     std::string backup_dir =
@@ -850,36 +875,41 @@ void gpt3_5::perform_archive(int64_t id, const msg_meta &conf, bool is_auto)
         fs::create_directories(backup_dir);
     }
 
-    std::time_t now = std::time(nullptr);
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     now += 8 * 3600;
-    struct std::tm tm_res;
-#ifdef _WIN32
-    _gmtime64_s(&tm_res, &now);
-#else
-    gmtime_r(&now, &tm_res);
-#endif
+    tm tm_res = *std::gmtime(&now);
     char time_buf[64];
     if (is_auto) {
         std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_auto", &tm_res);
-    }
-    else {
+    } else {
         std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d_%H-%M-%S", &tm_res);
     }
 
     std::string filename = std::string(time_buf) + ".json";
     std::string full_path = backup_dir + "/" + filename;
 
-    if (is_auto && fs::exists(full_path)) return; // Already backed up today
+    if (is_auto && fs::exists(full_path)) return;
 
     Json::Value J;
-    J["pre_prompt"] = pre_default[id];
-    J["history"] = history[id];
-    writefile(full_path, J.toStyledString());
+    {
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
+        J["pre_prompt"] = pre_default[id];
+        J["history"] = history[id];
+        writefile(full_path, J.toStyledString());
+    }
 
-    arc_check_counter++;
-    if (arc_check_counter >= 10) {
-        arc_is_full = (get_archives_total_size() >= 250 * 1024 * 1024);
-        arc_check_counter = 0;
+    bool need_check = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
+        if (++arc_check_counter >= 10) {
+            arc_check_counter = 0;
+            need_check = true;
+        }
+    }
+    if (need_check) {
+        bool full = (get_archives_total_size() >= 250 * 1024 * 1024);
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
+        arc_is_full = full;
     }
 
     if (!is_auto) {
@@ -973,13 +1003,15 @@ void gpt3_5::restore_archive(int64_t id, const msg_meta &conf,
         return;
     }
 
-    std::lock_guard<std::mutex> lock(data_lock);
     Json::Value J = string_to_json(readfile(full_path));
     if (J.isMember("history") && J.isMember("pre_prompt")) {
-        history[id] = J["history"];
-        pre_default[id] = J["pre_prompt"].asString();
-        conf.p->cq_send("归档 " + target_file + " 已成功恢复。", conf);
+        {
+            std::lock_guard<std::recursive_mutex> lock(data_lock);
+            history[id] = J["history"];
+            pre_default[id] = J["pre_prompt"].asString();
+        }
         save_history(id);
+        conf.p->cq_send("归档 " + target_file + " 已成功恢复。", conf);
     }
     else {
         conf.p->cq_send("归档文件格式错误。", conf);
