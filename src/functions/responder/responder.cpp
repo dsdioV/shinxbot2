@@ -209,34 +209,38 @@ void Responder::process(std::string message, const msg_meta &conf)
     if (groupid == 0) {
         return;
     }
-    auto it_reply = replies[groupid].find(trim(message));
-    if (it_reply != replies[groupid].end()) {
-        std::string response = it_reply->second;
-        size_t pos = 0;
-        while ((pos = response.find("{{username}}", pos)) !=
-               std::string::npos) {
-            response.replace(pos, 12,
-                             get_username(conf.p, conf.user_id, groupid));
-        }
-        if (response.find("[fwd]") == 0) {
-            if (conf.message_type == "private") {
-                Json::Value J;
-                J["message"] = string_to_json(response.substr(5))["messages"];
-                J["user_id"] = conf.user_id;
-                conf.p->cq_send("send_private_forward_msg", J);
-            }
-            else {
-                Json::Value J;
-                J["message"] = string_to_json(response.substr(5))["messages"];
-                J["group_id"] = conf.group_id;
-                conf.p->cq_send("send_group_forward_msg", J);
-            }
-        }
-        else {
-            conf.p->cq_send(response, conf);
-        }
-    }
+    send_reply_by_trigger(groupid, conf.user_id, trim(message), conf.p);
     return;
+}
+
+void Responder::send_reply_by_trigger(groupid_t group_id, userid_t user_id,
+                                      const std::string &trigger, bot *p)
+{
+    if (group_id == 0 || p == nullptr) {
+        return;
+    }
+
+    auto it_reply = replies[group_id].find(trim(trigger));
+    if (it_reply == replies[group_id].end()) {
+        return;
+    }
+
+    std::string response = it_reply->second;
+    size_t pos = 0;
+    while ((pos = response.find("{{username}}", pos)) != std::string::npos) {
+        response.replace(pos, 12, get_username(p, user_id, group_id));
+    }
+
+    if (response.find("[fwd]") == 0) {
+        Json::Value J;
+        J["message"] = string_to_json(response.substr(5))["messages"];
+        J["group_id"] = group_id;
+        p->cq_send("send_group_forward_msg", J);
+    }
+    else {
+        msg_meta conf{"group", user_id, group_id, 0, p};
+        p->cq_send(response, conf);
+    }
 }
 
 void Responder::save()
