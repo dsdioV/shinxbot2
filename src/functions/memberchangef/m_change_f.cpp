@@ -209,8 +209,7 @@ bool m_change_f::check(std::string message, const msg_meta &conf)
            (cmd_match_exact(message, {"welcome.help"}) ||
             cmd_match_prefix(message, {"设置入群消息", "删除入群消息"}) ||
             (conf.message_type == "internal" &&
-             conf.message_id == internal_message::kMemberChangeWelcome) ||
-            message == "$m_welcome");
+             conf.message_id == internal_message::kMemberChangeWelcome));
 }
 
 std::string m_change_f::help() { return ""; }
