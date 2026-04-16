@@ -207,7 +207,7 @@ bool m_change_f::check(std::string message, const msg_meta &conf)
 {
     return conf.group_id != 0 &&
            (cmd_match_exact(message, {"welcome.help"}) ||
-            cmd_match_prefix(message, {"设置入群消息", "删除入群消息", "设置入群消息内部触发 开", "设置入群消息内部触发 关"}) ||
+            cmd_match_prefix(message, {"设置入群消息", "删除入群消息"}) ||
             (conf.message_type == "internal" &&
              conf.message_id == internal_message::kMemberChangeWelcome) ||
             message == "$m_welcome");
