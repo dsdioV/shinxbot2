@@ -436,7 +436,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
                                               : ((conf.user_id << 1) | 1);
 
     {
-        std::lock_guard<std::mutex> lock(data_lock);
+        std::lock_guard<std::recursive_mutex> lock(data_lock);
         if (history.find(id) == history.end()) {
             pre_default[id] = default_prompt;
         }
