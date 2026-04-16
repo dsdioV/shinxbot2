@@ -28,7 +28,7 @@ void luck::process(std::string message, const msg_meta &conf) {
 bool luck::check(std::string message, const msg_meta &conf) {
     (void)conf;
     
-    return cmd_match_exact(trim(message), {"今日人品"});
+    return cmd_match_exact(trim(message), {"jrrp", "今日人品"});
 }
 
 std::string luck::help() {
