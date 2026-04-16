@@ -6,9 +6,10 @@
 void luck::process(std::string message, const msg_meta &conf) {
 
     auto now = std::chrono::system_clock::now();
-    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_c);
-    
+    auto beijing_now = now + std::chrono::hours(8);
+    std::time_t now_c = std::chrono::system_clock::to_time_t(beijing_now);
+    std::tm* now_tm = std::gmtime(&now_c);
+
     int year = now_tm->tm_year + 1900;
     int month = now_tm->tm_mon + 1;
     int day = now_tm->tm_mday;
