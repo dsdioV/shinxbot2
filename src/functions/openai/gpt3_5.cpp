@@ -60,36 +60,36 @@ gpt3_5::gpt3_5()
               "}";
         of.close();
     }
-    else {
-        std::string ans = readfile(openai_conf_path);
 
-        Json::Value res = string_to_json(ans);
+    std::string ans = readfile(openai_conf_path);
 
-        Json::ArrayIndex sz = res["keys"].size();
-        if (sz > MAX_KEYS) sz = MAX_KEYS;
-        for (Json::ArrayIndex i = 0; i < sz; ++i) {
-            key.push_back(res["keys"][i].asString());
-            is_lock.push_back(false);
-        }
+    Json::Value res = string_to_json(ans);
 
-        sz = res["mode"].size();
-        for (Json::ArrayIndex i = 0; i < sz; i++) {
-            std::string tmp = res["mode"][i].asString();
-            modes.push_back(tmp);
-            mode_prompt[tmp] = res[tmp];
-            if (i == 0) {
-                default_prompt = tmp;
-            }
-        }
-
-        parse_json_to_set(res["black_list"], black_list);
-
-        MAX_TOKEN = res["MAX_TOKEN"].asInt();
-        MAX_REPLY = res["MAX_REPLY"].asInt();
-        RED_LINE = res["RED_LINE"].asInt();
-        base_url = res.get("base_url", "https://api.openai.com").asString();
-        model_name = res.get("model", "gpt-3.5-turbo").asString();
+    Json::ArrayIndex sz = res["keys"].size();
+    if (sz > MAX_KEYS) sz = MAX_KEYS;
+    for (Json::ArrayIndex i = 0; i < sz; ++i) {
+        key.push_back(res["keys"][i].asString());
+        is_lock.push_back(false);
     }
+
+    sz = res["mode"].size();
+    for (Json::ArrayIndex i = 0; i < sz; i++) {
+        std::string tmp = res["mode"][i].asString();
+        modes.push_back(tmp);
+        mode_prompt[tmp] = res[tmp];
+        if (i == 0) {
+            default_prompt = tmp;
+        }
+    }
+
+    parse_json_to_set(res["black_list"], black_list);
+
+    MAX_TOKEN = res["MAX_TOKEN"].asInt();
+    MAX_REPLY = res["MAX_REPLY"].asInt();
+    RED_LINE = res["RED_LINE"].asInt();
+    base_url = res.get("base_url", "https://api.openai.com").asString();
+    model_name = res.get("model", "gpt-3.5-turbo").asString();
+
     is_open = true;
     is_debug = false;
     key_cycle = 0;
@@ -435,8 +435,16 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
     int64_t id = conf.message_type == "group" ? (conf.group_id << 1)
                                               : ((conf.user_id << 1) | 1);
 
+    {
+        std::lock_guard<std::mutex> lock(data_lock);
+        if (history.find(id) == history.end()) {
+            pre_default[id] = default_prompt;
+        }
+    }
+
     // Auto-archive check
     perform_archive(id, conf, true);
+
 
     const std::vector<cmd_exact_rule> exact_rules = {
         {".test",
@@ -649,9 +657,6 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
         if (!is_open) {
             conf.p->cq_send("已关闭。" + close_message, conf);
             return;
-        }
-        if (history.find(id) == history.end()) {
-            pre_default[id] = default_prompt;
         }
         is_lock[keyid] = true;
         active_ids.insert(id);
