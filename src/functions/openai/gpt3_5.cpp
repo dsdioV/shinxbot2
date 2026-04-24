@@ -263,30 +263,24 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid, const msg_meta &conf,
 
     perform_archive(id, conf, true, true);
 
-    std::string transcript;
-    Json::ArrayIndex older_sz = older_history.size();
-    for (Json::ArrayIndex i = 0; i < older_sz; ++i) {
-        std::string role = older_history[i].get("role", "unknown").asString();
-        std::string content = older_history[i].get("content", "").asString();
-        transcript += "[" + role + "]\n" + content + "\n\n";
-    }
-
     Json::Value req;
     req["model"] = model_name;
     req["temperature"] = 0.3;
     req["max_tokens"] = MAX_REPLY;
 
     Json::Value messages(Json::arrayValue);
-    Json::Value system_msg;
-    system_msg["role"] = "system";
-    system_msg["content"] =
-        "You are summarizing conversation history so it can be continued in a new chat session.";
-    messages.append(system_msg);
+    Json::Value prompt_messages = mode_prompt[current_mode.empty() ? default_prompt : current_mode];
+    for (Json::ArrayIndex i = 0; i < prompt_messages.size(); ++i) {
+        messages.append(prompt_messages[i]);
+    }
+    for (Json::ArrayIndex i = 0; i < older_history.size(); ++i) {
+        messages.append(older_history[i]);
+    }
 
     Json::Value user_msg;
     user_msg["role"] = "user";
     user_msg["content"] =
-        "Provide a detailed summary of the following conversation for continuing in a new session.\n\n"
+        "Provide a detailed summary of the previous conversation for continuing in a new session.\n\n"
         "The new session will not have access to the original conversation history, so preserve all context needed to continue seamlessly.\n\n"
         "Focus on:\n"
         "- Key topics discussed and why they matter\n"
@@ -300,9 +294,9 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid, const msg_meta &conf,
         "1. Write in aforementioned language, matching the original conversation language\n"
         "2. Be concise but complete — do not omit important context\n"
         "3. Output the summary directly without prefaces or meta-commentary\n"
-        "4. Start with a clear indicator (e.g., \"[Summary of previous conversation]\" or equivalent)\n\n"
+        "4. Start with a clear indicator (e.g., \"[Summary of previous conversation]\" or equivalent)\n"
         "5. Preserve user-by-user memory when possible: if different people have distinct tones or repeated viewpoints, describe them separately so the assistant can continue interacting naturally after compression\n\n"
-        "Conversation:\n" + transcript;
+        "Summarize the conversation above directly.";
     messages.append(user_msg);
     req["messages"] = messages;
 
@@ -340,13 +334,13 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid, const msg_meta &conf,
     }
 
     Json::Value new_history(Json::arrayValue);
-    for (Json::ArrayIndex i = 0; i < recent_history.size(); ++i) {
-        new_history.append(recent_history[i]);
-    }
     Json::Value summary_msg;
     summary_msg["role"] = "system";
     summary_msg["content"] = summary;
     new_history.append(summary_msg);
+    for (Json::ArrayIndex i = 0; i < recent_history.size(); ++i) {
+        new_history.append(recent_history[i]);
+    }
 
     {
         std::lock_guard<std::recursive_mutex> lock(data_lock);
