@@ -224,7 +224,7 @@ void gpt3_5::fallback_trim_history(int64_t id, int rounds)
     }
 }
 
-bool gpt3_5::compress_history(int64_t id, size_t keyid,
+bool gpt3_5::compress_history(int64_t id, size_t keyid, const msg_meta &conf,
                               std::string *error_message)
 {
     Json::Value old_history;
@@ -261,6 +261,8 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid,
         return false;
     }
 
+    perform_archive(id, conf, true, true);
+
     std::string transcript;
     Json::ArrayIndex older_sz = older_history.size();
     for (Json::ArrayIndex i = 0; i < older_sz; ++i) {
@@ -291,12 +293,15 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid,
         "- Important decisions made and their reasoning\n"
         "- Current work in progress and its state\n"
         "- Next steps or open questions to address\n"
+        "- The participants in the conversation, especially recurring group members, and their speaking style, personality, preferences, habits, and relationship dynamics\n"
+        "- Stable details that help imitate the established tone when continuing to talk with those same people later\n"
         "- Any relevant technical details, code snippets, or configurations mentioned\n\n"
         "Requirements:\n"
         "1. Write in aforementioned language, matching the original conversation language\n"
         "2. Be concise but complete — do not omit important context\n"
         "3. Output the summary directly without prefaces or meta-commentary\n"
         "4. Start with a clear indicator (e.g., \"[Summary of previous conversation]\" or equivalent)\n\n"
+        "5. Preserve user-by-user memory when possible: if different people have distinct tones or repeated viewpoints, describe them separately so the assistant can continue interacting naturally after compression\n\n"
         "Conversation:\n" + transcript;
     messages.append(user_msg);
     req["messages"] = messages;
@@ -335,13 +340,13 @@ bool gpt3_5::compress_history(int64_t id, size_t keyid,
     }
 
     Json::Value new_history(Json::arrayValue);
+    for (Json::ArrayIndex i = 0; i < recent_history.size(); ++i) {
+        new_history.append(recent_history[i]);
+    }
     Json::Value summary_msg;
     summary_msg["role"] = "system";
     summary_msg["content"] = summary;
     new_history.append(summary_msg);
-    for (Json::ArrayIndex i = 0; i < recent_history.size(); ++i) {
-        new_history.append(recent_history[i]);
-    }
 
     {
         std::lock_guard<std::recursive_mutex> lock(data_lock);
@@ -702,7 +707,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
 
              std::lock_guard<std::mutex> compress_lock(gptlock[compress_keyid]);
              std::string compress_error;
-             bool compressed = compress_history(id, compress_keyid, &compress_error);
+             bool compressed = compress_history(id, compress_keyid, conf, &compress_error);
              {
                  std::lock_guard<std::recursive_mutex> lock(data_lock);
                  is_lock[compress_keyid] = false;
@@ -748,7 +753,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
 
              std::lock_guard<std::mutex> compress_lock(gptlock[compress_keyid]);
              std::string compress_error;
-             bool compressed = compress_history(id, compress_keyid, &compress_error);
+             bool compressed = compress_history(id, compress_keyid, conf, &compress_error);
              {
                  std::lock_guard<std::recursive_mutex> lock(data_lock);
                  is_lock[compress_keyid] = false;
@@ -923,7 +928,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
         while (getlength(h) > (int64_t)(MAX_TOKEN - RED_LINE) && h.size() > 2) {
             lock_data.unlock();
             std::string compress_error;
-            bool compressed = compress_history(id, keyid, &compress_error);
+            bool compressed = compress_history(id, keyid, conf, &compress_error);
             lock_data.lock();
             if (!compressed) {
                 break;
@@ -1040,7 +1045,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
                 if (tokens > MAX_TOKEN - RED_LINE) {
                     lock_data.unlock();
                     std::string compress_error;
-                    bool compressed = compress_history(id, keyid, &compress_error);
+                    bool compressed = compress_history(id, keyid, conf, &compress_error);
                     lock_data.lock();
                     if (!compressed) {
                         for (int i = 5; i >= 1; i--) {
@@ -1106,7 +1111,8 @@ uintmax_t gpt3_5::get_archives_total_size()
     return total_size;
 }
 
-void gpt3_5::perform_archive(int64_t id, const msg_meta &conf, bool is_auto)
+void gpt3_5::perform_archive(int64_t id, const msg_meta &conf, bool is_auto,
+                             bool silent)
 {
     {
         std::lock_guard<std::recursive_mutex> lock(data_lock);
@@ -1161,7 +1167,7 @@ void gpt3_5::perform_archive(int64_t id, const msg_meta &conf, bool is_auto)
         arc_is_full = full;
     }
 
-    if (!is_auto) {
+    if (!is_auto && !silent) {
         conf.p->cq_send("归档已生成: " + filename, conf);
     }
 }
