@@ -621,36 +621,6 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
              }
              return true;
          }},
-        {"arc",
-         [&]() {
-             if (!is_allowed_arc(id, conf)) {
-                 conf.p->cq_send("Not on op list.", conf);
-                 return true;
-             }
-             std::istringstream arc_iss(args);
-             std::string sub_cmd;
-             arc_iss >> sub_cmd;
-             if (sub_cmd == "list") {
-                 int page = 1;
-                 arc_iss >> page;
-                 list_archives(id, conf, page);
-             }
-             else if (sub_cmd == "restore") {
-                 std::string target;
-                 arc_iss >> target;
-                 if (target.empty()) {
-                     conf.p->cq_send("用法: .ai arc restore [编号/文件名]",
-                                     conf);
-                 }
-                 else {
-                     restore_archive(id, conf, target);
-                 }
-             }
-             else {
-                 perform_archive(id, conf, false);
-             }
-             return true;
-         }},
         {".reset",
         [&]() {
             {
@@ -661,63 +631,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             conf.p->cq_send("reset done.", conf);
             return true;
         }},
-        {"reset",
-        [&]() {
-            {
-                std::lock_guard<std::recursive_mutex> lock(data_lock);
-                history[id].clear();
-            }
-            save_history(id);
-            conf.p->cq_send("reset done.", conf);
-            return true;
-        }},
         {".compress",
-         [&]() {
-             if (key.size() == 0) {
-                 conf.p->cq_send("No avaliable key!", conf);
-                 return true;
-             }
-             size_t compress_keyid = get_avaliable_key();
-             {
-                 std::lock_guard<std::recursive_mutex> lock(data_lock);
-                 if (is_lock[compress_keyid]) {
-                     conf.p->cq_send("请等待其他对话中输入的回复。", conf);
-                     return true;
-                 }
-                 if (active_ids.count(id)) {
-                     conf.p->cq_send("请等待该对话中上一个输入的回复。", conf);
-                     return true;
-                 }
-                 if (!is_open) {
-                     conf.p->cq_send("已关闭。" + close_message, conf);
-                     return true;
-                 }
-                 if (history.find(id) == history.end()) {
-                     pre_default[id] = default_prompt;
-                 }
-                 is_lock[compress_keyid] = true;
-                 active_ids.insert(id);
-             }
-
-             std::lock_guard<std::mutex> compress_lock(gptlock[compress_keyid]);
-             std::string compress_error;
-             bool compressed = compress_history(id, compress_keyid, conf, &compress_error);
-             {
-                 std::lock_guard<std::recursive_mutex> lock(data_lock);
-                 is_lock[compress_keyid] = false;
-                 active_ids.erase(id);
-             }
-             if (compressed) {
-                 save_history(id);
-                 conf.p->cq_send("compress done.", conf);
-             }
-             else {
-                 conf.p->cq_send(compress_error.empty() ? "compress failed." : compress_error,
-                                 conf);
-             }
-             return true;
-         }},
-        {"compress",
          [&]() {
              if (key.size() == 0) {
                  conf.p->cq_send("No avaliable key!", conf);
@@ -889,38 +803,6 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
                 reply += "history message count: " +
                          std::to_string(history[id].size()) + "\n";
                 reply += "note: context will be conpressed when prompt_tokens > compress threshold, context will be conpressed when prompt_tokens > trim threshold";
-            }
-            conf.p->cq_send(reply, conf);
-            return true;
-        }},
-        {"status",
-        [&]() {
-            std::string reply;
-            {
-                std::lock_guard<std::recursive_mutex> lock(data_lock);
-                int64_t compress_threshold = static_cast<int64_t>(MAX_TOKEN) -
-                                            static_cast<int64_t>(RED_LINE);
-                int64_t trim_threshold = static_cast<int64_t>(MAX_TOKEN) -
-                                        static_cast<int64_t>(MAX_REPLY);
-                reply = "current ai status:\n";
-                reply += "model: " + model_name + "\n";
-                reply += "mode: " + pre_default[id] + "\n";
-                reply += "MAX_TOKEN: " + std::to_string(MAX_TOKEN) + "\n";
-                reply += "MAX_REPLY: " + std::to_string(MAX_REPLY) + "\n";
-                reply += "RED_LINE: " + std::to_string(RED_LINE) + "\n";
-                reply += "compress threshold (MAX_TOKEN-RED_LINE): " +
-                         std::to_string(compress_threshold) + "\n";
-                reply += "trim threshold (MAX_TOKEN-MAX_REPLY): " +
-                         std::to_string(trim_threshold) + "\n";
-                reply += "last api prompt_tokens: " +
-                         std::to_string(last_prompt_tokens[id]) + "\n";
-                reply += "last api completion_tokens: " +
-                         std::to_string(last_completion_tokens[id]) + "\n";
-                reply += "last api total_tokens: " +
-                         std::to_string(last_total_tokens[id]) + "\n";
-                reply += "history message count: " +
-                         std::to_string(history[id].size()) + "\n";
-                reply += "note: auto compression now mainly uses the last API prompt_tokens as reference. If there is no previous usage yet, it falls back to getlength(history) as a temporary estimate.";
             }
             conf.p->cq_send(reply, conf);
             return true;
