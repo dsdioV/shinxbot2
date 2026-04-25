@@ -888,7 +888,7 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
                          std::to_string(last_total_tokens[id]) + "\n";
                 reply += "history message count: " +
                          std::to_string(history[id].size()) + "\n";
-                reply += "note: auto compression now mainly uses the last API prompt_tokens as reference. If there is no previous usage yet, it falls back to getlength(history) as a temporary estimate.";
+                reply += "note: context will be conpressed when prompt_tokens > compress threshold, context will be conpressed when prompt_tokens > trim threshold";
             }
             conf.p->cq_send(reply, conf);
             return true;

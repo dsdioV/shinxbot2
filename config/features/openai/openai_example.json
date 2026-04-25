@@ -10,7 +10,9 @@
     ],
     "MAX_TOKEN": 4000,
     "MAX_REPLY": 700,
+    "MAX_REPLY_comment": "context will be conpressed when prompt_tokens > MAX_TOKEN - MAX_TOKEN - MAX_REPLY (delete this)",
     "RED_LINE": 1000,
+    "RED_LINE_comment": "context will be trimed when prompt_tokens > MAX_TOKEN - RED_LINE (delete this)",
     "show_user_id": true,
     "show_user_id_comment": "If true, add [User: ID] prefix to user messages (delete this line)",
     "op": [
