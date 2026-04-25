@@ -861,6 +861,64 @@ void gpt3_5::process(std::string message, const msg_meta &conf)
             if (do_save) save_file();
             return true;
         }},
+        {".status",
+        [&]() {
+            std::string reply;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                int64_t history_length = getlength(history[id]);
+                int64_t compress_threshold = static_cast<int64_t>(MAX_TOKEN) -
+                                            static_cast<int64_t>(RED_LINE);
+                int64_t trim_threshold = static_cast<int64_t>(MAX_TOKEN) -
+                                        static_cast<int64_t>(MAX_REPLY);
+                reply = "current ai status:\n";
+                reply += "model: " + model_name + "\n";
+                reply += "mode: " + pre_default[id] + "\n";
+                reply += "MAX_TOKEN: " + std::to_string(MAX_TOKEN) + "\n";
+                reply += "MAX_REPLY: " + std::to_string(MAX_REPLY) + "\n";
+                reply += "RED_LINE: " + std::to_string(RED_LINE) + "\n";
+                reply += "compress threshold (MAX_TOKEN-RED_LINE): " +
+                         std::to_string(compress_threshold) + "\n";
+                reply += "trim threshold (MAX_TOKEN-MAX_REPLY): " +
+                         std::to_string(trim_threshold) + "\n";
+                reply += "history message count: " +
+                         std::to_string(history[id].size()) + "\n";
+                reply += "getlength(history): " +
+                         std::to_string(history_length) + "\n";
+                reply += "note: getlength is only a rough estimate based on all history[i][\"content\"] lengths / 0.75; it is not the API reported input/output tokens.";
+            }
+            conf.p->cq_send(reply, conf);
+            return true;
+        }},
+        {"status",
+        [&]() {
+            std::string reply;
+            {
+                std::lock_guard<std::recursive_mutex> lock(data_lock);
+                int64_t history_length = getlength(history[id]);
+                int64_t compress_threshold = static_cast<int64_t>(MAX_TOKEN) -
+                                            static_cast<int64_t>(RED_LINE);
+                int64_t trim_threshold = static_cast<int64_t>(MAX_TOKEN) -
+                                        static_cast<int64_t>(MAX_REPLY);
+                reply = "current ai status:\n";
+                reply += "model: " + model_name + "\n";
+                reply += "mode: " + pre_default[id] + "\n";
+                reply += "MAX_TOKEN: " + std::to_string(MAX_TOKEN) + "\n";
+                reply += "MAX_REPLY: " + std::to_string(MAX_REPLY) + "\n";
+                reply += "RED_LINE: " + std::to_string(RED_LINE) + "\n";
+                reply += "compress threshold (MAX_TOKEN-RED_LINE): " +
+                         std::to_string(compress_threshold) + "\n";
+                reply += "trim threshold (MAX_TOKEN-MAX_REPLY): " +
+                         std::to_string(trim_threshold) + "\n";
+                reply += "history message count: " +
+                         std::to_string(history[id].size()) + "\n";
+                reply += "getlength(history): " +
+                         std::to_string(history_length) + "\n";
+                reply += "note: getlength is only a rough estimate based on all history[i][\"content\"] lengths / 0.75; it is not the API reported input/output tokens.";
+            }
+            conf.p->cq_send(reply, conf);
+            return true;
+        }},
     };
 
     bool handled = false;
@@ -1084,7 +1142,8 @@ std::string gpt3_5::help()
     return "OpenAI GPT-3.5：使用 .ai [内容] 开始对话\n"
            "指令列表：\n"
            ".ai reset - 重置当前对话上下文\n"
-           ".ai compress / .ai.compress - 压缩旧上下文并保留最近对话\n"
+           ".ai status - 查看当前实际生效的模型/阈值/历史长度估算\n"
+           ".ai compress - 压缩旧上下文并保留最近对话\n"
            ".ai change [模式] - 切换提示词模式\n"
            ".ai arc - 手动归档当前上下文\n"
            ".ai arc list [页码] - 查看归档列表（每页5条）\n"
