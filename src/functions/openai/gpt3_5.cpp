@@ -1034,15 +1034,15 @@ std::string gpt3_5::help()
 {
     return "OpenAI GPT-3.5：使用 .ai [内容] 开始对话\n"
            "指令列表：\n"
-           ".ai reset - 重置当前对话上下文\n"
-           ".ai status - 查看当前实际生效的模型/阈值/历史长度估算\n"
-           ".ai compress - 压缩旧上下文并保留最近对话\n"
-           ".ai change [模式] - 切换提示词模式\n"
-           ".ai arc - 手动归档当前上下文\n"
-           ".ai arc list [页码] - 查看归档列表（每页5条）\n"
-           ".ai arc restore [编号/文件名] - 从归档中恢复上下文\n"
-           ".ai sw - 仅 OP 可用, 关闭模型作维护用\n"
-           ".ai set reply/token/red [数值] - 修改 MAX_REPLY/MAX_TOKEN/RED_LINE\n"
+           ".ai.reset - 重置当前对话上下文\n"
+           ".ai.status - 查看当前实际生效的模型/阈值/历史长度估算\n"
+           ".ai.compress - 压缩旧上下文并保留最近对话\n"
+           ".ai.change [模式] - 切换提示词模式\n"
+           ".ai.arc - 手动归档当前上下文\n"
+           ".ai.arc list [页码] - 查看归档列表（每页5条）\n"
+           ".ai.arc restore [编号/文件名] - 从归档中恢复上下文\n"
+           ".ai.sw - 仅 OP 可用, 关闭模型作维护用\n"
+           ".ai.set reply/token/red [数值] - 修改 MAX_REPLY/MAX_TOKEN/RED_LINE\n"
            "权限说明：归档与恢复功能在群聊中需 OP权限，私聊可直接使用。";
 }
 
