@@ -314,8 +314,6 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
             int result = system(cmd.c_str());
             if (result != 0) {
                 cq_send("更新失败，请检查网络连接和仓库状态", conf);
-            } else {
-                cq_send("更新成功", conf);
             }
             cmd = "git -C " + plugin_path + " submodule update --init --recursive";
             setlog(LOG::INFO, "执行命令：" + cmd);
@@ -323,7 +321,7 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
             if (result != 0) {
                 cq_send("更新子模块失败，请检查网络连接和仓库状态", conf);
             } else {
-                cq_send("更新子模块成功", conf);
+                cq_send("更新成功", conf);
             }
             return true;
         } else {
