@@ -314,8 +314,6 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
             int result = system(cmd.c_str());
             if (result != 0) {
                 cq_send("更新失败，请检查网络连接和仓库状态", conf);
-            } else {
-                cq_send("更新成功", conf);
             }
             cmd = "git -C " + plugin_path + " submodule update --init --recursive";
             setlog(LOG::INFO, "执行命令：" + cmd);
@@ -323,7 +321,7 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
             if (result != 0) {
                 cq_send("更新子模块失败，请检查网络连接和仓库状态", conf);
             } else {
-                cq_send("更新子模块成功", conf);
+                cq_send("更新成功", conf);
             }
             return true;
         } else {
@@ -534,6 +532,9 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
     const auto require_group_at_bot = [&]() {
         return conf.message_type == "group" && is_start_with_at_me;
     };
+    const auto require_group_at_bot_or_private = [&]() {
+        return require_group_at_bot() || conf.message_type == "private";
+    };
 
     const std::vector<cmd_exact_rule> exact_rules = {
         {"bot.help", handle_bot_help, {}},
@@ -545,7 +546,7 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
         {"bot.list_alias", handle_bot_list_alias, {require_op}},
         {"bot.progress", handle_bot_progress, {}},
         {"bot.blockclear", handle_group_blockclear, {require_group_at_bot}},
-        {"bot.module.list", handle_module_list, {require_group_at_bot, require_op}}
+        {"bot.module.list", handle_module_list, {require_group_at_bot_or_private, require_op}}
     };
 
     const std::vector<cmd_prefix_rule> prefix_rules = {
@@ -562,8 +563,8 @@ bool shinxbot::meta_func(std::string message, const msg_meta &conf)
         {"bot.unblock ", handle_group_unblock, {require_group_at_bot}},
         {"bot.white ", handle_group_white, {require_group_at_bot}},
         {"bot.unwhite ", handle_group_unwhite, {require_group_at_bot}},
-        {"bot.module.clone ", handle_module_clone, {require_group_at_bot, require_op}},
-        {"bot.module.compile_and_load ", handle_module_compile_and_load, {require_group_at_bot, require_op}}
+        {"bot.module.clone ", handle_module_clone, {require_group_at_bot_or_private, require_op}},
+        {"bot.module.compile_and_load ", handle_module_compile_and_load, {require_group_at_bot_or_private, require_op}}
     };
 
     bool handled = false;
