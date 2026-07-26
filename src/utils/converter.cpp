@@ -51,7 +51,8 @@ std::string message_to_string(const Json::Value &J, bool need_encode) {
         return J.asString();
     }
     if (J["type"].asString() == "text") {
-        return need_encode ? cq_encode(J["data"]["text"].asString()) : J["data"]["text"].asString();
+        return need_encode ? cq_encode(J["data"]["text"].asString())
+                           : J["data"]["text"].asString();
     } else {
         std::string ret = "[CQ:" + J["type"].asString();
         for (auto u : J["data"].getMemberNames()) {

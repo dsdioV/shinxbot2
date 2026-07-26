@@ -66,7 +66,8 @@ Json::Value expand_string_to_messageArr(std::string s) {
             if (pos > last_pos) {
                 Json::Value jj;
                 jj["type"] = "text";
-                jj["data"]["text"] = cq_decode(s.substr(last_pos, pos - last_pos));
+                jj["data"]["text"] =
+                    cq_decode(s.substr(last_pos, pos - last_pos));
                 messageArr.append(jj);
             }
             size_t end_pos = s.find("]", pos);

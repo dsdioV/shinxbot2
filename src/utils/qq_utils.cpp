@@ -116,7 +116,8 @@ void upload_file(bot *p, const fs::path &file, const groupid_t &group_id,
         J["folder"] = id;
         J = string_to_json(p->cq_send("upload_group_file", J));
         if (J.isMember("msg")) {
-            p->cq_send(Json::FastWriter().write(J), msg_meta("group", 0, group_id, 0));
+            p->cq_send(Json::FastWriter().write(J),
+                       msg_meta("group", 0, group_id, 0));
         }
     } catch (...) {
         p->setlog(LOG::WARNING, "File upload failed.");
@@ -172,17 +173,22 @@ void send_file_private(const bot *p, const userid_t user_id,
 }
 
 /**
- * This function substitutes the CQ:image segment with a local file path, which can be used for uploading files.
- * CQ format: [CQ:image,file=123.jpg,file_size=114514,sub_type=0,summary=,url=https://example.com/image.jpg]
+ * This function substitutes the CQ:image segment with a local file path, which
+ * can be used for uploading files. CQ format:
+ * [CQ:image,file=123.jpg,file_size=114514,sub_type=0,summary=,url=https://example.com/image.jpg]
  */
-std::string substitute_image_segment(bot *p, std::string segment, const fs::path &save_dir, const std::string &cq_image_segment_template) {
+std::string
+substitute_image_segment(bot *p, std::string segment, const fs::path &save_dir,
+                         const std::string &cq_image_segment_template) {
     size_t cq_pos = segment.find("[CQ:image");
     while (cq_pos != std::string::npos) {
         size_t end_pos = segment.find("]", cq_pos);
         if (end_pos == std::string::npos) {
             break; // Invalid segment, no closing bracket
         }
-        std::string img_segment = segment.substr(cq_pos + 10, end_pos - cq_pos - 10); // Extract the content inside [CQ:image...]
+        std::string img_segment = segment.substr(
+            cq_pos + 10,
+            end_pos - cq_pos - 10); // Extract the content inside [CQ:image...]
         img_segment = cq_decode(img_segment);
         std::istringstream ss(img_segment);
         std::string token;
@@ -201,13 +207,17 @@ std::string substitute_image_segment(bot *p, std::string segment, const fs::path
             try {
                 download(url, save_dir, file_name);
                 fs::path local_path = fs::absolute(save_dir / file_name);
-                std::string cq_image_segment = fmt::format(cq_image_segment_template, cq_encode(local_path.string()));
+                std::string cq_image_segment = fmt::format(
+                    cq_image_segment_template, cq_encode(local_path.string()));
                 segment.replace(cq_pos, end_pos - cq_pos + 1, cq_image_segment);
             } catch (const std::exception &e) {
-                p->setlog(LOG::ERROR, "Failed to download image: " + std::string(e.what()));
+                p->setlog(LOG::ERROR,
+                          "Failed to download image: " + std::string(e.what()));
             }
         } else {
-            p->setlog(LOG::WARNING, "Invalid CQ:image segment, missing file or url parameter.");
+            p->setlog(
+                LOG::WARNING,
+                "Invalid CQ:image segment, missing file or url parameter.");
         }
         cq_pos = segment.find("[CQ:image", cq_pos + 1);
     }
