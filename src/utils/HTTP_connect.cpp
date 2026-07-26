@@ -84,7 +84,7 @@ std::string do_http_request(httplib::Client &client,
 
                 const size_t slash_pos = proxy_str.find('/');
                 if (slash_pos != std::string::npos) {
-                    proxy_str = proxy_str.substr(0, slash_pos);
+                    proxy_str.erase(slash_pos); // truncate in place
                 }
 
                 const size_t at_pos = proxy_str.rfind('@');
