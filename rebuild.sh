@@ -16,12 +16,16 @@
 #        · 编译成功        -> 覆盖框架里的 .so
 #        · 编译失败        -> 保留框架里现有的旧 .so
 #        · 插件已不在仓库  -> 删掉框架里对应的 .so
-#   6. 支持非交互: bash rebuild.sh 1|2|3
+#   6. 构建资源受限，绝不占满整机（见下方 BUILD_* 配置）
+#   7. 支持非交互: bash rebuild.sh 1|2|3
 #
-# 构建资源：插件编译走独立的 docker run（compose run 不支持 --memory）。
-#   容器内存上限默认 2G、并行度 2。注意框架服务的 mem_limit 是 1G：早期用
-#   1G + 4 路并行编 random_color 会 OOM（cc1plus: Killed），故构建容器单独
-#   放宽，不改动服务本身的限额。
+# 构建资源限制（本机 4 核且同时跑着其他服务，构建必须让路）：
+#   · BUILD_CPUS      --cpus 配额，限制吞吐上限
+#   · BUILD_CPUSET    绑定核心集合。注意：--cpus 不会改变容器内的 nproc，
+#                     而框架的 build.sh 写死用 `-j$(nproc-1)`，所以必须靠
+#                     cpuset 让 nproc 变小，否则它仍会 -j3 把整机压满。
+#   · BUILD_JOBS      并行编译的插件数（每个都是单线程 make -j1）
+#   默认值让构建最多占用 2 个核（0-1），其余核心留给你的其他程序。
 #
 # 注意: 本插件仓已按需裁剪（保留清单见 bot 的 config/core/module_load.json），
 #       不再跟随上游全量功能集；上游改动按文件取用，不做整体 merge。
@@ -41,8 +45,11 @@ PLUGINS_BRANCH="test"
 BACKUP_ROOT="/opt/projects/shinxbot2-backups"
 BACKUP_KEEP=10
 
-BUILD_JOBS=2          # 并行编译的插件数
-BUILD_MEM="2g"        # 构建容器内存上限（独立于框架服务的 1G 限额）
+# --- 构建资源（保守默认，宁可慢也不要压垮机器）---
+BUILD_CPUS="2"           # CPU 配额上限（--cpus）
+BUILD_CPUSET="0-1"       # 绑定核心；同时决定容器内 nproc，进而决定 build.sh 的 -j
+BUILD_JOBS="2"           # 并行编译的插件数
+BUILD_MEM="2g"           # 内存上限（random_color 在 1G 下会 OOM）
 # ===============================================
 
 RED='\033[0;31m'
@@ -111,18 +118,25 @@ image_name() {
     echo "$img"
 }
 
-build_plugins() {
+# 统一的构建容器参数：受 CPU/内存限制，避免影响机器上的其他程序
+build_run() {  # 额外参数... -- 命令...
     local img
     img="$(image_name)"
-    echo -e "${YELLOW}>>> 编译插件 (镜像=$img, 并行度=$BUILD_JOBS, 内存上限=$BUILD_MEM)...${NC}"
-
     docker run --rm \
+        --cpus="$BUILD_CPUS" \
+        --cpuset-cpus="$BUILD_CPUSET" \
         --memory="$BUILD_MEM" \
         -e BUILD_JOBS="$BUILD_JOBS" \
         -v "$FRAMEWORK_DIR":/workspace-framework \
         -v "$PLUGINS_DIR":/workspace-plugins \
-        -w /workspace-plugins \
-        "$img" bash -c '
+        -w /workspace \
+        "$img" "$@"
+}
+
+build_plugins() {
+    echo -e "${YELLOW}>>> 编译插件 (并行度=$BUILD_JOBS, cpus=$BUILD_CPUS, cpuset=$BUILD_CPUSET, mem=$BUILD_MEM)...${NC}"
+
+    build_run bash -c '
             set -uo pipefail    # 故意不用 -e：逐插件收集失败，最后统一处理
 
             FAIL=/tmp/build_failures.txt
@@ -217,18 +231,20 @@ build_plugins() {
 }
 
 build_framework() {
-    echo -e "${YELLOW}>>> 编译框架...${NC}"
+    echo -e "${YELLOW}>>> 编译框架 (cpus=$BUILD_CPUS, cpuset=$BUILD_CPUSET, mem=$BUILD_MEM)...${NC}"
 
-    docker compose run --rm shinx-bot bash -lc '
+    build_run bash -lc '
         set -e
         cd /workspace
+
+        # 容器内 nproc 由 --cpuset-cpus 决定，进而决定 build.sh 的 -j$(nproc-1)。
 
         # build/ 同样是容器内 root 创建的，只能在容器内清理。
         # 但 build/shinxbot 正是线上运行的那个可执行文件，所以先暂存一份：
         # 编译失败就放回去，避免"编崩了连容器都起不来"。
         if [ -f ./build/shinxbot ]; then
             cp -a ./build/shinxbot /tmp/shinxbot.prev
-            echo "已暂存当前二进制 -> /tmp/shinxbot.prev"
+            echo "已暂存当前二进制 -> /tmp/shinxbot.prev (nproc=$(nproc))"
         fi
 
         rm -rf ./build
@@ -261,6 +277,7 @@ show_menu() {
     echo "===================================="
     echo "框架: $FRAMEWORK_REMOTE/$FRAMEWORK_BRANCH  ($(repo_branch "$FRAMEWORK_DIR"))"
     echo "插件: $PLUGINS_REMOTE/$PLUGINS_BRANCH  ($(repo_branch "$PLUGINS_DIR"))"
+    echo "构建: cpus=$BUILD_CPUS cpuset=$BUILD_CPUSET jobs=$BUILD_JOBS mem=$BUILD_MEM"
     echo "===================================="
     echo "1. 仅更新插件（拉取代码 + 编译 + 重启）"
     echo "2. 仅更新框架（拉取代码 + 编译 + 重启）"
