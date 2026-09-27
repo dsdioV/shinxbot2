@@ -8,13 +8,20 @@
 #   1. 拉取前校验「当前分支 == 配置分支」，一律 --ff-only；
 #      已跟踪文件有未提交改动时直接拒绝执行
 #   2. 重编前把线上 .so 备份到 /opt/projects/shinxbot2-backups/so/<时间戳>/
-#   3. 所有构建缓存的清理都在【容器内】执行 —— build/ 由容器内 root 创建，
-#      宿主用户删不动，旧版在宿主侧 rm -rf 一直静默失败（因此每次都在吃
-#      陈旧缓存）
-#   4. 部署 .so 采用「镜像」语义：插件仓是唯一事实来源，框架里多出来的旧
-#      .so 会被清掉，否则删掉的插件会以陈旧 .so 的形式残留在框架里
-#   5. 编译失败绝不部署：容器脚本带 set -e，且有产物数量自检
-#   6. 支持非交互: bash rebuild.sh 1|2|3  （无参数才进菜单）
+#   3. 构建缓存的清理在【容器内】执行 —— build/ 由容器内 root 创建，宿主
+#      用户删不动，旧版在宿主侧 rm -rf 一直静默失败（因此一直在吃陈旧缓存）
+#   4. 逐插件判定编译结果，不再依赖 make_all.sh —— 它的 compile_cmake() 最后
+#      一句是 `cd ../..`，该命令成功会吞掉 make 的失败，整体退出码恒为 0
+#   5. 部署语义（避免"编译失败反而把线上能用的删掉"）：
+#        · 编译成功        -> 覆盖框架里的 .so
+#        · 编译失败        -> 保留框架里现有的旧 .so
+#        · 插件已不在仓库  -> 删掉框架里对应的 .so
+#   6. 支持非交互: bash rebuild.sh 1|2|3
+#
+# 构建资源：插件编译走独立的 docker run（compose run 不支持 --memory）。
+#   容器内存上限默认 2G、并行度 2。注意框架服务的 mem_limit 是 1G：早期用
+#   1G + 4 路并行编 random_color 会 OOM（cc1plus: Killed），故构建容器单独
+#   放宽，不改动服务本身的限额。
 #
 # 注意: 本插件仓已按需裁剪（保留清单见 bot 的 config/core/module_load.json），
 #       不再跟随上游全量功能集；上游改动按文件取用，不做整体 merge。
@@ -33,6 +40,9 @@ PLUGINS_BRANCH="test"
 
 BACKUP_ROOT="/opt/projects/shinxbot2-backups"
 BACKUP_KEEP=10
+
+BUILD_JOBS=2          # 并行编译的插件数
+BUILD_MEM="2g"        # 构建容器内存上限（独立于框架服务的 1G 限额）
 # ===============================================
 
 RED='\033[0;31m'
@@ -94,14 +104,31 @@ backup_libs() {
     echo -e "${YELLOW}回滚: cp -a $dest/functions/*.so $FRAMEWORK_DIR/lib/functions/${NC}"
 }
 
-build_plugins() {
-    echo -e "${YELLOW}>>> 编译插件...${NC}"
+image_name() {
+    local img
+    img="$(docker compose config --images 2>/dev/null | head -1)"
+    [ -n "$img" ] || img="shinxbot2-shinx-bot"
+    echo "$img"
+}
 
-    docker compose run --rm \
+build_plugins() {
+    local img
+    img="$(image_name)"
+    echo -e "${YELLOW}>>> 编译插件 (镜像=$img, 并行度=$BUILD_JOBS, 内存上限=$BUILD_MEM)...${NC}"
+
+    docker run --rm \
+        --memory="$BUILD_MEM" \
+        -e BUILD_JOBS="$BUILD_JOBS" \
         -v "$FRAMEWORK_DIR":/workspace-framework \
         -v "$PLUGINS_DIR":/workspace-plugins \
-        shinx-bot bash -c '
-            set -euo pipefail
+        -w /workspace-plugins \
+        "$img" bash -c '
+            set -uo pipefail    # 故意不用 -e：逐插件收集失败，最后统一处理
+
+            FAIL=/tmp/build_failures.txt
+            LOGDIR=/workspace-framework/log/build
+            : > "$FAIL"
+            mkdir -p "$LOGDIR"
 
             # 1) 清理上一轮缓存与产物。必须在容器内做：build/ 是容器内 root
             #    建的，宿主用户 rm 会 Permission denied（旧版就是这样静默失败的）。
@@ -112,47 +139,79 @@ build_plugins() {
             # 2) generate_cmake.py 生成的 CMakeLists 用的是相对 include
             #    ../../lib/shinxbot2-api/include；本机插件 checkout 的 submodule
             #    是空的，所以补三行指向框架目录的绝对 include。
-            #    （全新 clone --recurse-submodules 的话不需要这三行。）
             inject_includes() {
                 for cmake_file in $(find . -name CMakeLists.txt); do
                     sed -i "1i include_directories(/workspace-framework/src)\ninclude_directories(/workspace-framework/lib/shinxbot2-api/include)\ninclude_directories(/workspace-framework/lib/cpp-httplib)" "$cmake_file"
                 done
             }
 
-            cd /workspace-plugins/functions
-            python3 generate_cmake.py
-            inject_includes
-            bash ./make_all.sh
+            # 3) 单插件编译；失败记入 $FAIL，绝不静默通过
+            build_one() {
+                local d="$1" name rc
+                name=$(basename "$d")
+                (
+                    cd "$d" && mkdir -p build && cd build &&
+                    cmake -DCMAKE_BUILD_TYPE=Release .. >/dev/null 2>&1 &&
+                    make -j1
+                ) >"$LOGDIR/$name.log" 2>&1
+                rc=$?
+                if [ "$rc" -ne 0 ]; then
+                    echo "$name" >> "$FAIL"
+                    echo "  失败: $name"
+                else
+                    echo "  成功: $name"
+                fi
+            }
+            export -f build_one
+            export FAIL LOGDIR
 
-            cd /workspace-plugins/events
-            python3 generate_cmake.py
-            inject_includes
-            bash ./make_all.sh
-
-            # 3) 产物自检：某一类一个 .so 都没编出来就中止，
-            #    绝不能把框架里现有的 .so 清空。
             for kind in functions events; do
-                n=$(ls -1 /workspace-plugins/lib/$kind/*.so 2>/dev/null | wc -l)
-                echo "编译产物 $kind: $n 个"
-                [ "$n" -gt 0 ] || { echo "错误: $kind 没有产出任何 .so，中止部署" >&2; exit 1; }
+                cd "/workspace-plugins/$kind" || exit 1
+                python3 generate_cmake.py >/dev/null
+                inject_includes
+                echo "--- 编译 $kind ---"
+                find . -mindepth 1 -maxdepth 1 -type d -exec test -f {}/CMakeLists.txt \; -print \
+                    | xargs -I{} -P "$BUILD_JOBS" bash -c "build_one \"\$@\"" _ {}
+                cd /workspace-plugins || exit 1
             done
 
-            # 4) 镜像式部署：先覆盖拷贝，再删掉框架里已无对应源的旧 .so
-            sync_libs() {  # $1=源目录  $2=框架目标目录
-                cp -f "$1"/*.so "$2"/
-                for f in "$2"/*.so; do
+            # 4) 部署。三种情形分开处理，避免"编译失败反而把线上能用的删掉"
+            sync_libs() {  # $1=kind  $2=仓库产物目录  $3=框架目录
+                local kind="$1" src="$2" dst="$3" b name n_ok=0 n_kept=0 n_rm=0 f
+                mkdir -p "$dst"
+                for f in "$src"/*.so; do
                     [ -e "$f" ] || continue
-                    b=$(basename "$f")
-                    if [ ! -e "$1/$b" ]; then
-                        rm -f "$f"
-                        echo "已移除框架中多余的 $b"
+                    cp -f "$f" "$dst"/ && n_ok=$((n_ok + 1))
+                done
+                for f in "$dst"/*.so; do
+                    [ -e "$f" ] || continue
+                    b=$(basename "$f"); name=${b#lib}; name=${name%.so}
+                    if [ ! -d "/workspace-plugins/$kind/$name" ]; then
+                        rm -f "$f"; echo "  移除（已不在仓库）: $b"; n_rm=$((n_rm + 1))
+                    elif [ ! -e "$src/$b" ]; then
+                        echo "  保留旧版（本次编译失败）: $b"; n_kept=$((n_kept + 1))
                     fi
                 done
+                echo "  $kind: 更新 $n_ok 个, 保留旧版 $n_kept 个, 移除 $n_rm 个"
             }
-            mkdir -p /workspace-framework/lib/functions /workspace-framework/lib/events
-            sync_libs /workspace-plugins/lib/functions /workspace-framework/lib/functions
-            sync_libs /workspace-plugins/lib/events    /workspace-framework/lib/events
-            echo "部署完成: functions=$(ls -1 /workspace-framework/lib/functions/*.so | wc -l), events=$(ls -1 /workspace-framework/lib/events/*.so | wc -l)"
+            sync_libs functions /workspace-plugins/lib/functions /workspace-framework/lib/functions
+            sync_libs events    /workspace-plugins/lib/events    /workspace-framework/lib/events
+
+            # 5) 失败汇总（构建日志留在框架 log/build/ 供排查）
+            if [ -s "$FAIL" ]; then
+                echo ""
+                echo "==================== 警告 ===================="
+                echo "以下插件本次编译失败，已保留线上旧版本 .so，未做任何替换："
+                while read -r n; do
+                    [ -n "$n" ] || continue
+                    echo "  - $n   (日志: log/build/$n.log)"
+                    tail -n 3 "$LOGDIR/$n.log" 2>/dev/null | sed "s/^/      /"
+                done < "$FAIL"
+                echo "其余插件已正常更新。"
+                echo "=============================================="
+            else
+                echo "全部插件编译成功"
+            fi
         '
     echo -e "${GREEN}插件编译完成${NC}"
 }
